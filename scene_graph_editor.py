@@ -411,16 +411,10 @@ class App:
         self._centered = True
         self._place_nodes_in_ring(W, H)
 
-    # ── canvas Configure — only tracks resize, never places nodes ─────────────
+    # ── canvas Configure — tracks resize only ────────────────────────────────
     def _on_configure(self, event):
         self.canvas_w = event.width
         self.canvas_h = event.height
-        # On resize after initial placement, re-centre so nodes stay inside
-        if self._centered and (event.width > 10):
-            self._place_nodes_in_ring(event.width, event.height)
-            # Reset velocities so physics re-settles from new positions
-            for n in self.graph.nodes:
-                n.vx = n.vy = 0
 
     def _place_nodes_in_ring(self, W, H):
         cx, cy = W / 2, H / 2
@@ -813,8 +807,10 @@ class App:
                 f"'{sid}' not found in file.", parent=self.root); return
         self.graph = g; self.scene_id = sid
         self.sel_node = self.sel_edge = None
-        self._centered = False          # re-centre on next tick
         self.root.title(f"Scene Graph Editor  ·  {sid}")
+        # Re-centre nodes immediately using current live canvas size
+        W, H = self._live_dims()
+        self._place_nodes_in_ring(W, H)
         self._refresh_lists()
 
     def _show_json(self):
