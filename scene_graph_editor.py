@@ -59,15 +59,19 @@ ALL_RELS = SPATIAL_RELS + [
 ]
 
 # ── physics ───────────────────────────────────────────────────────────────────
-SPRING_LEN  = 200
-SPRING_K    = 0.04
-REPULSE_K   = 8000
-CENTER_K    = 15000
-CENTER_DEAD = 70
-DAMPING     = 0.80
-TIMESTEP    = 0.55
-NODE_R      = 40
-TICK_MS     = 28
+SPRING_LEN   = 180      # edge spring rest length
+SPRING_K     = 0.04     # spring stiffness
+PAIR_REST    = 150      # node–node rest distance: closer → repel, farther → attract
+PAIR_REPULSE = 30000    # steep inverse-square push when closer than PAIR_REST
+PAIR_K       = 0.005    # gentle pull stiffness when farther than PAIR_REST
+PAIR_MAX     = 1.5      # cap on the attraction magnitude
+GRAVITY_K    = 0.0025   # inward pull toward centre (keeps system centred)
+CORE_REPULSE = 14000    # outward push when inside CORE_DEAD (don't pile on core)
+CORE_DEAD    = 80       # radius px: inside → push out, outside → pull in
+DAMPING      = 0.82
+TIMESTEP     = 0.55
+NODE_R       = 40
+TICK_MS      = 28
 
 # ── theme ─────────────────────────────────────────────────────────────────────
 BG      = "#0f0f17"
@@ -504,26 +508,36 @@ class App:
         fx = {n: 0.0 for n in nodes}
         fy = {n: 0.0 for n in nodes}
 
-        # centre repulsion (negative gravity from core)
+        # ── two-zone centre force ──────────────────────────────────────────
+        # Outside CORE_DEAD: inward gravity  → pulls system back to centre
+        # Inside  CORE_DEAD: outward push    → nodes don't pile on the glow
         for n in nodes:
             if n.pinned:
                 continue
             dx, dy = n.x - cx, n.y - cy
             d = math.hypot(dx, dy) + 1e-6
-            if d < CENTER_DEAD:
-                continue
-            mag = min(CENTER_K / (d * d), 55)
-            fx[n] += mag * dx / d
-            fy[n] += mag * dy / d
+            if d < CORE_DEAD:
+                # push OUT — inverse-square repulsion from core
+                mag = min(CORE_REPULSE / (d * d), 80)
+                fx[n] += mag * dx / d
+                fy[n] += mag * dy / d
+            else:
+                # pull IN — linear gravity toward centre
+                mag = GRAVITY_K * d
+                fx[n] -= mag * dx / d
+                fy[n] -= mag * dy / d
 
-        # node–node repulsion
+        # node–node force: repel when closer than PAIR_REST, attract when farther
         for i, a in enumerate(nodes):
             for b in nodes[i+1:]:
                 dx, dy = a.x - b.x, a.y - b.y
                 d = math.hypot(dx, dy) + 1e-6
                 if d > 600:
                     continue
-                mag = min(REPULSE_K / (d * d), 160)
+                if d < PAIR_REST:
+                    mag = min(PAIR_REPULSE / (d * d), 160)   # steep push apart
+                else:
+                    mag = -min(PAIR_K * (d - PAIR_REST), PAIR_MAX)  # gentle pull
                 fx[a] += mag * dx / d;  fy[a] += mag * dy / d
                 fx[b] -= mag * dx / d;  fy[b] -= mag * dy / d
 

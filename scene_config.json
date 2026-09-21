@@ -1,0 +1,13 @@
+{
+  "object_categories": [
+    "_scene_", "bed", "bookshelf", "cabinet", "chair", "desk", "dresser",
+    "lamp", "nightstand", "shelf", "sofa", "stool", "table", "wardrobe"
+  ],
+  "relations": [
+    "in", "left", "right", "front", "behind", "bigger than", "smaller than",
+    "taller than", "shorter than", "close by", "same style as",
+    "same super category as", "same material as", "symmetrical to",
+    "standing on", "above"
+  ],
+  "output_coordinate_space": "normalized_echo_scene"
+}

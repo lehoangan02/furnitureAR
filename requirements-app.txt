@@ -1,0 +1,10 @@
+# EchoScene runtime dependencies. Install a matching PyTorch/PyTorch3D build
+# for the machine before installing this file.
+-r echoscene_backend/requirements.txt
+einops
+omegaconf
+tensorboardx
+open3d
+ftfy
+regex
+git+https://github.com/openai/CLIP.git

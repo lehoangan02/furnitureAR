@@ -1,0 +1,12 @@
+{
+  "seed": 42,
+  "objects": [
+    {"id": "sofa", "category": "sofa"},
+    {"id": "table", "category": "table"},
+    {"id": "chair", "category": "chair"}
+  ],
+  "relations": [
+    {"subject": "table", "predicate": "left", "object": "sofa"},
+    {"subject": "chair", "predicate": "close by", "object": "table"}
+  ]
+}

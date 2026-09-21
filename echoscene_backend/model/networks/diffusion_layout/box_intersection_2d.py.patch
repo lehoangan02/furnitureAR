@@ -1,0 +1,33 @@
+--- /Users/lehoangan/Documents/GitHub/ROOM/echoscene/model/networks/diffusion_layout/box_intersection_2d.py
++++ /Users/lehoangan/Documents/GitHub/ROOM/echoscene/model/networks/diffusion_layout/box_intersection_2d.py
+@@ -5,3 +5,2 @@
+ '''
+ import torch
+-from .cuda_op.cuda_ext import sort_v
+ EPSILON = 1e-8
+@@ -139,3 +138,12 @@
+     vertices_normalized = vertices - mean       # normalization makes sorting easier
+-    return sort_v(vertices_normalized, mask, num_valid).long()
++    
++    # Pure PyTorch implementation of sort_v
++    angles = torch.atan2(vertices_normalized[..., 1], vertices_normalized[..., 0])
++    angles[~mask] = 1000.0 # push invalid to end
++    sorted_indices = torch.argsort(angles, dim=-1)
++    
++    # We need to take the first 9 elements (max 8 vertices + 1 duplicate of the first)
++    sorted_indices_9 = sorted_indices[..., :9].clone()
++    # For the valid polygon, we need to duplicate the first vertex at the end to close it
++    # Actually calculate_area expects A, B, C, ..., A, X, X, X
++    # We will just pad the rest with the 0th valid element index to give zero area
++    B, N, _ = vertices.shape
++    result = torch.zeros(B, N, 9, dtype=torch.long, device=vertices.device)
++    for b in range(B):
++        for n in range(N):
++            nv = num_valid[b, n]
++            if nv >= 3:
++                valid_idx = sorted_indices[b, n, :nv]
++                result[b, n, :nv] = valid_idx
++                result[b, n, nv] = valid_idx[0] # Close the loop
++                result[b, n, nv+1:] = valid_idx[0] # Pad with the same vertex
++    return result
+ 
