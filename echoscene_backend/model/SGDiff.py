@@ -64,8 +64,11 @@ class SGDiff(nn.Module):
                     '[*] shape branch has successfully been restored from: %s' % os.path.join(exp, 'checkpoint',
                                                                                               'model{}.pth'.format(
                                                                                                   epoch)), 'blue'))
-            except:
-                print('no vqvae or shape_df recorded. Assume it is only the layout branch')
+            except Exception as error:
+                raise RuntimeError(
+                    'Shape generation requested, but the shape branch could not be restored '
+                    'from the model checkpoint.'
+                ) from error
         try:
             self.epoch = ckpt.pop('epoch')
             self.counter = ckpt.pop('counter')

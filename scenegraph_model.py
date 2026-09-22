@@ -181,6 +181,7 @@ class EchoSceneRunner:
         """Convert generated SDFs to placed OBJ meshes and one combined GLB."""
         import trimesh
 
+        from helpers.util import fit_shapes_to_box_v2, pytorch3d_to_trimesh
         from model.diff_utils.util_3d import sdf_to_mesh
 
         output_path = Path(output_path).resolve()
@@ -194,13 +195,8 @@ class EchoSceneRunner:
         meshes = []
         mesh_files = []
         for index, item in enumerate(objects):
-            mesh = trimesh.Trimesh(
-                vertices=mesh_batch.verts_list()[index].detach().cpu().numpy(),
-                faces=mesh_batch.faces_list()[index].detach().cpu().numpy(),
-                process=False,
-            )
+            mesh = pytorch3d_to_trimesh(mesh_batch[index])
             box = np.concatenate((boxes[index], [np.degrees(angles[index])]))
-            from helpers.util import fit_shapes_to_box_v2
             _, mesh = fit_shapes_to_box_v2(mesh, box, degrees=True)
             mesh_path = mesh_dir / f"{index}_{item['id']}.obj"
             mesh.export(mesh_path)
