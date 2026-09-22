@@ -63,23 +63,43 @@ class EchoSceneRunner:
         self.classes = sorted(set(app_config["object_categories"]))
         self.class_to_id = {name: index for index, name in enumerate(self.classes)}
         self.relations = app_config["relations"]
-        self.normalization = app_config.get("normalization")
         self.coordinate_space = app_config.get("output_coordinate_space", "normalized_echo_scene")
         if "_scene_" not in self.class_to_id:
             raise ValueError("scene_config.json must include the '_scene_' category")
 
+        # ── Load model args (matches the released checkpoint's training config) ──
         model_args_file = HERE / "model_args.json"
         model_args = json.loads(model_args_file.read_text()) if model_args_file.exists() else {}
+
+        # ── Resolve the training statistics file for box denormalization ──
+        # The original eval pipeline uses:
+        #   normalized_file = os.path.join(dataset, 'centered_bounds_{}_trainval.txt'.format(room_type))
+        # and then calls descale_box_params(boxes, file=normalized_file)
+        room_type = model_args.get("room_type", "all")
+        self.normalized_file = str(HERE / "data" / f"centered_bounds_{room_type}_trainval.txt")
+        if not Path(self.normalized_file).exists():
+            # Fallback to 'all' if room-specific stats are missing
+            self.normalized_file = str(HERE / "data" / "centered_bounds_all_trainval.txt")
+        if not Path(self.normalized_file).exists():
+            raise FileNotFoundError(
+                f"Training stats file not found: {self.normalized_file}\n"
+                "Copy centered_bounds_*_trainval.txt from the FRONT dataset into data/"
+            )
+
+        # ── Load diffusion config ──
         config_path = ECHOSCENE / "config/full_mp.yaml"
-        if not config_path.is_absolute():
-            config_path = (ECHOSCENE / config_path).resolve()
         cfg = OmegaConf.load(config_path)
         cfg.hyper.device = self.device
-        # Physical inference guidance needs FRONT training statistics, which are
-        # not part of this runtime package. Keep the released model's sampler
-        # usable without that dataset-only file.
-        cfg.layout_branch.diffusion_kwargs.train_stats_file = None
+
+        # The original eval code sets train_stats_file from the dataset:
+        #   diff_cfg.layout_branch.diffusion_kwargs.train_stats_file = dataset.box_normalized_stats
+        # We set it to our bundled stats file so inference guidance can work.
+        # For standalone inference without guidance, null is also safe.
+        cfg.layout_branch.diffusion_kwargs.train_stats_file = self.normalized_file
+
+        # Disable inference guidance for standalone inference (it needs floor_plan etc.)
         cfg.layout_branch.inference_guidance.enabled = False
+
         cfg.layout_branch.denoiser_kwargs.using_clip = clip_features
         cfg.shape_branch.vq_ckpt = str(HERE / "checkpoint/vqvae_threedfront_best.pth")
         for key in ("df_cfg", "vq_cfg"):
@@ -88,6 +108,8 @@ class EchoSceneRunner:
                 cfg.shape_branch[key] = str((config_path.parent / path).resolve())
 
         from model.SGDiff import SGDiff
+        # Build vocab exactly as the original dataset/eval code does:
+        # The dataset adds '\n' to category names; our vocab must match.
         vocab = {
             "object_idx_to_name": [x + "\n" for x in self.classes],
             "object_idx_to_name_grained": [x + "\n" for x in self.classes],
@@ -95,11 +117,11 @@ class EchoSceneRunner:
         }
         self.model = SGDiff(
             type=model_args.get("network_type", "echoscene"), diff_opt=cfg, vocab=vocab,
-            replace_latent=model_args.get("replace_latent", False),
+            replace_latent=model_args.get("replace_latent", True),
             with_changes=model_args.get("with_changes", True),
-            residual=model_args.get("residual", False),
+            residual=model_args.get("residual", True),
             gconv_pooling=model_args.get("pooling", "avg"),
-            with_angles=model_args.get("with_angles", False),
+            with_angles=model_args.get("with_angles", True),
             clip=clip_features, separated=model_args.get("separated", False),
         )
         checkpoint_stem = self.checkpoint.stem
@@ -123,18 +145,22 @@ class EchoSceneRunner:
             return self.clip.encode_text(clip.tokenize(values).to(self.device)).float()
 
     def generate(self, data, output_path):
+        from helpers.util import descale_box_params, postprocess_sincos2arctan
+
         objects, relations, seed = _graph(data)
         if seed is not None:
             random.seed(seed)
             np.random.seed(seed)
             self.torch.manual_seed(seed)
 
+        # Build graph: user objects + _scene_ room node at the end
         nodes = objects + [{"id": "room", "category": "_scene_"}]
         index = {item["id"]: i for i, item in enumerate(nodes)}
         unknown = sorted({item["category"] for item in objects} - set(self.class_to_id))
         if unknown:
             raise ValueError("unknown categories: " + ", ".join(unknown))
 
+        # Build triples: user relations + "in" relation for each object → room
         triples, relation_text = [], []
         for relation in relations:
             if relation["predicate"] not in self.relations:
@@ -144,40 +170,94 @@ class EchoSceneRunner:
             triples.append([index[relation["subject"]], self.relations.index(relation["predicate"]), index[relation["object"]]])
             relation_text.append(f"{subject} {relation['predicate']} {target}")
         for item in objects:
-            triples.append([index[item["id"]], 0, index["room"]])
+            triples.append([index[item["id"]], 0, index["room"]])  # 0 = "in"
             relation_text.append(f"{item['category']} in room")
 
         torch = self.torch
         obj_ids = torch.tensor([self.class_to_id[item["category"]] for item in nodes], dtype=torch.long, device=self.device)
         triple_ids = torch.tensor(triples, dtype=torch.long, device=self.device)
+
+        # ── Compute CLIP features (matching original dataset code) ──
         if self.clip_features:
-            object_features = self._features([item["category"] for item in objects] + ["room"])
+            # Object features: CLIP text encoding of each category name
+            # The last node is _scene_ → use "room" as text (matching dataset line 400)
+            obj_texts = [item["category"] for item in objects] + ["room"]
+            object_features = self._features(obj_texts)
+            # Relation features: CLIP text encoding of "<subject_cat> <predicate> <object_cat>"
             relation_features = self._features(relation_text)
         else:
             object_features = relation_features = None
+
+        # ── Set objectness mask (original eval code lines 399-406) ──
+        # Mark _scene_ as non-object so diffusion can handle it correctly
+        objectness_mask = torch.ones(len(nodes), dtype=torch.bool, device=obj_ids.device)
+        for i, node in enumerate(nodes):
+            if node["category"] in ("_scene_", "floor"):
+                objectness_mask[i] = False
+        self.model.diff.current_objectness = objectness_mask
+        # No ground-truth boxes for standalone inference
+        self.model.diff.current_gt_boxes = None
 
         with torch.no_grad():
             result = self.model.sample_box_and_shape(
                 obj_ids, triple_ids, object_features, relation_features, gen_shape=True
             )
-        boxes = torch.cat((result["sizes"], result["translations"]), dim=1).cpu().numpy()
-        boxes = self._descale(boxes)
-        angles = result["angles"].cpu().numpy()
-        angles = np.arctan2(angles[:, 0], angles[:, 1])
-        mesh_files, glb_file = self._export_shapes(result["shapes"], boxes, angles, objects, output_path)
-        return {
-            "objects": [
-                {"id": item["id"], "category": item["category"],
-                 "size": boxes[i, :3].tolist(), "position": boxes[i, 3:6].tolist(),
-                 "rotation_y": float(angles[i]), "mesh": mesh_files[i]}
-                for i, item in enumerate(objects)
-            ],
-            "relations": relations,
-            "coordinate_space": "metric" if self.normalization else self.coordinate_space,
-            "mesh_scene": glb_file,
-        }
 
-    def _export_shapes(self, shapes, boxes, angles, objects, output_path):
+        # ── Post-process layout: exactly like eval_3dfront.py ──
+        # Concatenate sizes and translations: (N, 6) = [l, h, w, x, y, z]
+        boxes_pred = torch.cat((result["sizes"], result["translations"]), dim=-1)
+
+        # Angles: model outputs sin/cos → convert to angle in radians → degrees
+        angles_pred = result["angles"]
+        angles_pred = postprocess_sincos2arctan(angles_pred)  # (N, 1) radians
+        angles_deg = angles_pred / np.pi * 180  # (N, 1) degrees
+
+        # Denormalize boxes from [-1, 1] to metric using training stats
+        # This is exactly what eval_3dfront.py does:
+        #   boxes_pred_den = descale_box_params(boxes_pred, file=normalized_file)
+        boxes_den = descale_box_params(boxes_pred, file=self.normalized_file)
+
+        boxes_np = boxes_den.cpu().numpy()
+        angles_np = angles_deg.cpu().numpy()
+        angles_rad = angles_pred.cpu().numpy()
+
+        # ── Export meshes if shapes were generated ──
+        mesh_files = [None] * len(objects)
+        glb_file = None
+        shapes = result.get("shapes")
+        if shapes is not None:
+            try:
+                mesh_files, glb_file = self._export_shapes(
+                    shapes, boxes_np, angles_np, objects, output_path
+                )
+            except Exception as e:
+                print(f"[!] mesh export failed: {e}", file=sys.stderr)
+
+        # ── Build output (only user objects, not _scene_) ──
+        out_objects = []
+        for i, item in enumerate(objects):
+            entry = {
+                "id": item["id"],
+                "category": item["category"],
+                "size": boxes_np[i, :3].tolist(),       # [l, h, w] in meters
+                "position": boxes_np[i, 3:6].tolist(),  # [x, y, z] in meters
+                "rotation_y": float(angles_rad[i, 0]),  # radians
+                "rotation_y_deg": float(angles_np[i, 0]),  # degrees (convenience)
+            }
+            if mesh_files[i] is not None:
+                entry["mesh"] = mesh_files[i]
+            out_objects.append(entry)
+
+        output = {
+            "objects": out_objects,
+            "relations": relations,
+            "coordinate_space": "metric",
+        }
+        if glb_file is not None:
+            output["mesh_scene"] = glb_file
+        return output
+
+    def _export_shapes(self, shapes, boxes, angles_deg, objects, output_path):
         """Convert generated SDFs to placed OBJ meshes and one combined GLB."""
         import trimesh
 
@@ -196,7 +276,8 @@ class EchoSceneRunner:
         mesh_files = []
         for index, item in enumerate(objects):
             mesh = pytorch3d_to_trimesh(mesh_batch[index])
-            box = np.concatenate((boxes[index], [np.degrees(angles[index])]))
+            # fit_shapes_to_box_v2 expects [l, h, w, x, y, z, angle_degrees]
+            box = np.concatenate((boxes[index], [float(angles_deg[index])]))
             _, mesh = fit_shapes_to_box_v2(mesh, box, degrees=True)
             mesh_path = mesh_dir / f"{index}_{item['id']}.obj"
             mesh.export(mesh_path)
@@ -206,28 +287,6 @@ class EchoSceneRunner:
         glb_path = output_path.with_suffix(".glb")
         trimesh.Scene(meshes).export(glb_path)
         return mesh_files, str(glb_path.relative_to(output_path.parent))
-
-    def _descale(self, boxes):
-        if not self.normalization:
-            # EchoScene predicts the six box values after standardization with
-            # scale=3. These are not directly usable sizes and positions.
-            mean = np.asarray(
-                [1.3827214, 1.309359, 0.9488993, -0.12464812, 0.6188591, -0.54847],
-                dtype=np.float32,
-            )
-            std = np.asarray(
-                [1.7797655, 1.657638, 0.8501885, 1.9160025, 2.0038228, 0.70099753],
-                dtype=np.float32,
-            )
-            return boxes * std / 3.0 + mean
-        boxes = boxes.copy()
-        size_min = np.asarray(self.normalization["size_min"], dtype=np.float32)
-        size_max = np.asarray(self.normalization["size_max"], dtype=np.float32)
-        position_min = np.asarray(self.normalization["position_min"], dtype=np.float32)
-        position_max = np.asarray(self.normalization["position_max"], dtype=np.float32)
-        boxes[:, :3] = (boxes[:, :3] + 1) / 2 * (size_max - size_min) + size_min
-        boxes[:, 3:6] = (boxes[:, 3:6] + 1) / 2 * (position_max - position_min) + position_min
-        return boxes
 
 
 def main():
