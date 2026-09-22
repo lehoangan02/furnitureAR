@@ -122,7 +122,7 @@ class EchoSceneRunner:
         with self.torch.no_grad():
             return self.clip.encode_text(clip.tokenize(values).to(self.device)).float()
 
-    def generate(self, data):
+    def generate(self, data, output_path):
         objects, relations, seed = _graph(data)
         if seed is not None:
             random.seed(seed)
@@ -157,21 +157,59 @@ class EchoSceneRunner:
             object_features = relation_features = None
 
         with torch.no_grad():
-            result = self.model.sample_box_and_shape(obj_ids, triple_ids, object_features, relation_features)
+            result = self.model.sample_box_and_shape(
+                obj_ids, triple_ids, object_features, relation_features, gen_shape=True
+            )
         boxes = torch.cat((result["sizes"], result["translations"]), dim=1).cpu().numpy()
         boxes = self._descale(boxes)
         angles = result["angles"].cpu().numpy()
         angles = np.arctan2(angles[:, 0], angles[:, 1])
+        mesh_files, glb_file = self._export_shapes(result["shapes"], boxes, angles, objects, output_path)
         return {
             "objects": [
                 {"id": item["id"], "category": item["category"],
                  "size": boxes[i, :3].tolist(), "position": boxes[i, 3:6].tolist(),
-                 "rotation_y": float(angles[i])}
+                 "rotation_y": float(angles[i]), "mesh": mesh_files[i]}
                 for i, item in enumerate(objects)
             ],
             "relations": relations,
             "coordinate_space": "metric" if self.normalization else self.coordinate_space,
+            "mesh_scene": glb_file,
         }
+
+    def _export_shapes(self, shapes, boxes, angles, objects, output_path):
+        """Convert generated SDFs to placed OBJ meshes and one combined GLB."""
+        import trimesh
+
+        from model.diff_utils.util_3d import sdf_to_mesh
+
+        output_path = Path(output_path).resolve()
+        mesh_dir = output_path.with_name(output_path.stem + "_meshes")
+        mesh_dir.mkdir(parents=True, exist_ok=True)
+
+        mesh_batch = sdf_to_mesh(shapes, render_all=True)
+        if mesh_batch is None or len(mesh_batch) < len(objects):
+            raise RuntimeError("shape generation did not produce enough meshes")
+
+        meshes = []
+        mesh_files = []
+        for index, item in enumerate(objects):
+            mesh = trimesh.Trimesh(
+                vertices=mesh_batch.verts_list()[index].detach().cpu().numpy(),
+                faces=mesh_batch.faces_list()[index].detach().cpu().numpy(),
+                process=False,
+            )
+            box = np.concatenate((boxes[index], [np.degrees(angles[index])]))
+            from helpers.util import fit_shapes_to_box_v2
+            _, mesh = fit_shapes_to_box_v2(mesh, box, degrees=True)
+            mesh_path = mesh_dir / f"{index}_{item['id']}.obj"
+            mesh.export(mesh_path)
+            meshes.append(mesh)
+            mesh_files.append(str(mesh_path.relative_to(output_path.parent)))
+
+        glb_path = output_path.with_suffix(".glb")
+        trimesh.Scene(meshes).export(glb_path)
+        return mesh_files, str(glb_path.relative_to(output_path.parent))
 
     def _descale(self, boxes):
         if not self.normalization:
@@ -196,7 +234,7 @@ def main():
     args = parser.parse_args()
 
     runner = EchoSceneRunner(args.checkpoint, args.config, args.device, True)
-    result = runner.generate(json.loads(Path(args.input).read_text()))
+    result = runner.generate(json.loads(Path(args.input).read_text()), Path(args.output))
     Path(args.output).write_text(json.dumps(result, indent=2) + "\n")
     print(f"wrote {args.output}")
 

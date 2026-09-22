@@ -51,7 +51,13 @@ The simplest run uses the included example:
 python scenegraph_model.py example_scene.json output/scene.json
 ```
 
-The default paths are:
+The command writes the layout JSON plus generated shape assets:
+
+- `output/scene.json`: layout and mesh references
+- `output/scene.glb`: combined generated furniture scene
+- `output/scene_meshes/*.obj`: one positioned mesh per object
+
+The default input paths are:
 
 - Checkpoint: `checkpoint/model2050.pth`
 - Application config: `scene_config.json`

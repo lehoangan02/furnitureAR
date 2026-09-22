@@ -506,7 +506,7 @@ class EchoToShape(BaseModel):
             torch.manual_seed(seed_value)
         C, D, H, W = shape
         size = (1, C, D, H, W)
-        single_noise = torch.randn(size, device='cuda')
+        single_noise = torch.randn(size, device=self.rel.device)
         noise = single_noise.repeat(B, 1, 1, 1, 1)
 
         samples, intermediates = ddim_sampler.sample(S=ddim_steps,
@@ -708,5 +708,4 @@ class EchoToShape(BaseModel):
         if load_opt:
             self.optimizer.load_state_dict(state_dict['opt'])
             print(colored('[*] optimizer successfully restored from: %s' % ckpt, 'blue'))
-
 
