@@ -105,7 +105,7 @@ class EchoSceneRunner:
         checkpoint_stem = self.checkpoint.stem
         epoch = checkpoint_stem[len("model"):] if checkpoint_stem.startswith("model") else checkpoint_stem
         self.model.load_networks(str(HERE), epoch,
-                                 restart_optim=True, load_shape_branch=False)
+                                 restart_optim=True, load_shape_branch=True)
         self.model.to(self.device).eval()
 
         self.clip = None
