@@ -98,7 +98,8 @@ class EchoSceneRunner:
             with_angles=model_args.get("with_angles", False),
             clip=clip_features, separated=model_args.get("separated", False),
         )
-        epoch = self.checkpoint.stem.removeprefix("model")
+        checkpoint_stem = self.checkpoint.stem
+        epoch = checkpoint_stem[len("model"):] if checkpoint_stem.startswith("model") else checkpoint_stem
         self.model.load_networks(str(HERE), epoch,
                                  restart_optim=True, load_shape_branch=False)
         self.model.to(self.device).eval()
