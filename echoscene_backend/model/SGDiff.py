@@ -46,10 +46,12 @@ class SGDiff(nn.Module):
 
         return obj_selected, shape_loss, layout_loss, loss_dict
 
-    def load_networks(self, exp, epoch, strict=True, restart_optim=False, load_shape_branch=True):
+    def load_networks(self, exp, epoch, strict=True, restart_optim=False, load_shape_branch=True,
+                      checkpoint_path=None):
         # Load checkpoints on CPU first to avoid a large temporary GPU memory spike
         # during evaluation on smaller cards, then move the model to CUDA later.
-        ckpt = torch.load(os.path.join(exp, 'checkpoint', 'model{}.pth'.format(epoch)), map_location='cpu')
+        checkpoint_path = checkpoint_path or os.path.join(exp, 'checkpoint', 'model{}.pth'.format(epoch))
+        ckpt = torch.load(checkpoint_path, map_location='cpu')
         diff_state_dict = {}
         diff_state_dict['opt'] = ckpt.pop('opt')
         if load_shape_branch:
@@ -61,13 +63,11 @@ class SGDiff(nn.Module):
                 self.diff.ShapeDiff.df_module = self.diff.ShapeDiff.df
                 self.diff.ShapeDiff.vqvae_module = self.diff.ShapeDiff.vqvae
                 print(colored(
-                    '[*] shape branch has successfully been restored from: %s' % os.path.join(exp, 'checkpoint',
-                                                                                              'model{}.pth'.format(
-                                                                                                  epoch)), 'blue'))
+                    '[*] shape branch has successfully been restored from: %s' % checkpoint_path, 'blue'))
             except Exception as error:
                 raise RuntimeError(
                     'Shape generation requested, but the shape branch could not be restored '
-                    'from the model checkpoint.'
+                    'from the model checkpoint {}.'.format(checkpoint_path)
                 ) from error
         try:
             self.epoch = ckpt.pop('epoch')
@@ -78,8 +78,7 @@ class SGDiff(nn.Module):
         ckpt.pop('vqvae', None)
         ckpt.pop('shape_df', None)
         self.diff.load_state_dict(ckpt, strict=strict) # layout branch only
-        print(colored('[*] GCN and layout branch has successfully been restored from: %s' % os.path.join(exp, 'checkpoint',
-                                                                                    'model{}.pth'.format(epoch)),
+        print(colored('[*] GCN and layout branch has successfully been restored from: %s' % checkpoint_path,
                       'blue'))
 
         if not restart_optim:

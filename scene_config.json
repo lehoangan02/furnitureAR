@@ -1,13 +1,12 @@
 {
   "object_categories": [
-    "_scene_", "bed", "bookshelf", "cabinet", "chair", "desk", "dresser",
-    "lamp", "nightstand", "shelf", "sofa", "stool", "table", "wardrobe"
+    "_scene_", "bed", "bookshelf", "cabinet", "chair", "desk", "floor",
+    "lamp", "nightstand", "shelf", "sofa", "table", "tv_stand", "wardrobe"
   ],
   "relations": [
-    "in", "left", "right", "front", "behind", "bigger than", "smaller than",
-    "taller than", "shorter than", "close by", "same style as",
-    "same super category as", "same material as", "symmetrical to",
-    "standing on", "above"
+    "in", "left", "right", "front", "behind", "close by", "above",
+    "standing on", "bigger than", "smaller than", "taller than", "shorter than",
+    "symmetrical to", "same style as", "same super category as", "same material as"
   ],
   "output_coordinate_space": "normalized_echo_scene"
 }
