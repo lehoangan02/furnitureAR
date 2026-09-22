@@ -75,7 +75,11 @@ class EchoSceneRunner:
             config_path = (ECHOSCENE / config_path).resolve()
         cfg = OmegaConf.load(config_path)
         cfg.hyper.device = self.device
+        # Physical inference guidance needs FRONT training statistics, which are
+        # not part of this runtime package. Keep the released model's sampler
+        # usable without that dataset-only file.
         cfg.layout_branch.diffusion_kwargs.train_stats_file = None
+        cfg.layout_branch.inference_guidance.enabled = False
         cfg.layout_branch.denoiser_kwargs.using_clip = clip_features
         cfg.shape_branch.vq_ckpt = str(HERE / "checkpoint/vqvae_threedfront_best.pth")
         for key in ("df_cfg", "vq_cfg"):
