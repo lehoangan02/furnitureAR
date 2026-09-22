@@ -209,7 +209,17 @@ class EchoSceneRunner:
 
     def _descale(self, boxes):
         if not self.normalization:
-            return boxes
+            # EchoScene predicts the six box values after standardization with
+            # scale=3. These are not directly usable sizes and positions.
+            mean = np.asarray(
+                [1.3827214, 1.309359, 0.9488993, -0.12464812, 0.6188591, -0.54847],
+                dtype=np.float32,
+            )
+            std = np.asarray(
+                [1.7797655, 1.657638, 0.8501885, 1.9160025, 2.0038228, 0.70099753],
+                dtype=np.float32,
+            )
+            return boxes * std / 3.0 + mean
         boxes = boxes.copy()
         size_min = np.asarray(self.normalization["size_min"], dtype=np.float32)
         size_max = np.asarray(self.normalization["size_max"], dtype=np.float32)

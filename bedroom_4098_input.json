@@ -1,0 +1,15 @@
+{
+  "seed": 4098,
+  "objects": [
+    {"id": "bed", "category": "bed"},
+    {"id": "nightstand_left", "category": "nightstand"},
+    {"id": "nightstand_right", "category": "nightstand"},
+    {"id": "wardrobe", "category": "wardrobe"},
+    {"id": "lamp", "category": "lamp"}
+  ],
+  "relations": [
+    {"subject": "nightstand_left", "predicate": "left", "object": "bed"},
+    {"subject": "nightstand_right", "predicate": "right", "object": "bed"},
+    {"subject": "lamp", "predicate": "above", "object": "nightstand_left"}
+  ]
+}
